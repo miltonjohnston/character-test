@@ -2,14 +2,13 @@ import * as THREE from "three";
 import * as dat from "lil-gui";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { VOXLoader, VOXMesh } from "three/examples/jsm/loaders/VOXLoader.js";
 import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 
 // Octree
 import { Octree } from "three/addons/math/Octree.js";
 import { OctreeHelper } from "three/addons/helpers/OctreeHelper.js";
-
-
 
 /**
  ******************************
@@ -43,7 +42,7 @@ const camera = new THREE.PerspectiveCamera(
   0.1,
   1000
 );
-camera.position.set(20, 20, 100);
+camera.position.set(0, 5, 5);
 scene.add(camera);
 
 /**
@@ -88,7 +87,13 @@ const worldOctree = new Octree();
  */
 // Main Model
 let building;
-const deltaPosition = new THREE.Vector3(0, 0, 0);
+const direction = new THREE.Vector3();
+const playerVelocity = new THREE.Vector3();
+let delta;
+let playerOnFloor = false;
+let GRAVITY = 30;
+const keyStates = {};
+const playerDirection = new THREE.Vector3();
 
 // Draco
 const dracoLoader = new DRACOLoader();
@@ -101,22 +106,38 @@ gltfLoader.setDRACOLoader(dracoLoader);
 /**
  * Models
  */
+// const loader = new VOXLoader();
+// loader.load("models/monu10.vox", function (chunks) {
+//   for (let i = 0; i < chunks.length; i++) {
+//     const chunk = chunks[i];
+
+//     // displayPalette( chunk.palette );
+
+//     const mesh = new VOXMesh(chunk);
+//     mesh.scale.setScalar(0.5);
+//     scene.add(mesh);
+
+//     console.log(mesh);
+
+//     console.log(worldOctree);
+//     worldOctree.fromGraphNode(mesh);
+//     const octreeHelper = new OctreeHelper(worldOctree);
+//     octreeHelper.visible = false;
+//     scene.add(octreeHelper);
+
+//     gui.add({ debug: false }, "debug").onChange(function (value) {
+//       octreeHelper.visible = value;
+//     });
+//   }
+// });
+
 // Load Building Model
-gltfLoader.load("/models/main.glb", (gltf) => {
+gltfLoader.load("/models/book.glb", (gltf) => {
   building = gltf.scene;
-  building.scale.set(0.5, 0.5, 0.5);
+  building.scale.set(1.5, 1.5, 1.5);
 
   // Octree physics to building
   worldOctree.fromGraphNode(building);
-
-  // Octree helper
-  const octreeHelper = new OctreeHelper(worldOctree);
-  octreeHelper.visible = false;
-  scene.add(octreeHelper);
-
-  gui.add({ debug: false }, "debug").onChange(function (value) {
-    octreeHelper.visible = value;
-  });
 
   scene.add(building);
 });
@@ -125,7 +146,7 @@ gltfLoader.load("/models/main.glb", (gltf) => {
 const gSphere = new THREE.SphereGeometry(1);
 const mSphere = new THREE.MeshBasicMaterial({ color: 0xff0000 });
 const sphere = new THREE.Mesh(gSphere, mSphere); // Sphere Mesh
-sphere.position.z = 15;
+sphere.position.y = 15;
 scene.add(sphere);
 
 const sphereCollider = new THREE.Sphere(sphere.position.clone(), 1); // Sphere physics body
@@ -133,61 +154,96 @@ const sphereCollider = new THREE.Sphere(sphere.position.clone(), 1); // Sphere p
 /**
  * Functioins
  */
-function updatePlayer() {
-  sphereCollider.translate(deltaPosition); // Move as deltaPosition
-  sphere.position.copy(sphereCollider.center); // Move sphere Mesh to physics body position
-
-  const result = worldOctree.sphereIntersect(sphereCollider); // bumped?
+function playerCollisions() {
+  playerOnFloor = false;
+  const result = worldOctree.sphereIntersect(sphereCollider);
   if (result) {
-    sphereCollider.translate(result.normal.multiplyScalar(result.depth)); // if bumped, back to before position.
+    playerOnFloor = result.normal.y > -10;
+    if (!playerOnFloor) {
+      // console.log("case!");
+      playerVelocity.addScaledVector(
+        result.normal,
+        -result.normal.dot(playerVelocity)
+      );
+    }
+    sphereCollider.translate(result.normal.multiplyScalar(result.depth));
   }
 }
 
-// Handle keydown events
-function onKeyDown(event) {
-  switch (event.code) {
-    case "KeyW":
-      deltaPosition.z = -0.1;
-      break;
-    case "KeyS":
-      deltaPosition.z = 0.1;
-      break;
-    case "KeyA":
-      deltaPosition.x = -0.1;
-      break;
-    case "KeyD":
-      deltaPosition.x = 0.1;
-      break;
-    case "KeyQ":
-      deltaPosition.y = -0.1;
-      break;
-    case "KeyE":
-      deltaPosition.y = 0.1;
-      break;
+function updatePlayer(deltaTime) {
+  let damping = Math.exp(-4 * deltaTime) - 1;
+
+  if (!playerOnFloor) {
+    playerVelocity.y -= GRAVITY * deltaTime;
+
+    // small air resistance
+    damping *= 0.1;
+  }
+
+  playerVelocity.addScaledVector(playerVelocity, damping);
+
+  const deltaPosition = playerVelocity.clone().multiplyScalar(deltaTime);
+  sphereCollider.translate(deltaPosition);
+  sphere.position.copy(sphereCollider.center);
+
+  playerCollisions();
+}
+
+function getForwardVector() {
+  camera.getWorldDirection(playerDirection);
+  playerDirection.y = 0;
+  playerDirection.normalize();
+
+  return playerDirection;
+}
+
+function getSideVector() {
+  camera.getWorldDirection(playerDirection);
+  playerDirection.y = 0;
+  playerDirection.normalize();
+  playerDirection.cross(camera.up);
+
+  return playerDirection;
+}
+
+function controls(deltaTime) {
+  // gives a bit of air control
+  const speedDelta = deltaTime * (playerOnFloor ? 25 : 8);
+
+  if (keyStates["KeyW"]) {
+    playerVelocity.add(getForwardVector().multiplyScalar(speedDelta));
+  }
+
+  if (keyStates["KeyS"]) {
+    playerVelocity.add(getForwardVector().multiplyScalar(-speedDelta));
+  }
+
+  if (keyStates["KeyA"]) {
+    playerVelocity.add(getSideVector().multiplyScalar(-speedDelta));
+  }
+
+  if (keyStates["KeyD"]) {
+    playerVelocity.add(getSideVector().multiplyScalar(speedDelta));
+  }
+
+  if (playerOnFloor) {
+    if (keyStates["Space"]) {
+      playerVelocity.y = 15;
+    }
   }
 }
 
-// Handle keyup events
-function onKeyUp(event) {
-  switch (event.code) {
-    case "KeyW":
-      deltaPosition.z = 0;
-      break;
-    case "KeyS":
-      deltaPosition.z = 0;
-      break;
-    case "KeyA":
-      deltaPosition.x = 0;
-      break;
-    case "KeyD":
-      deltaPosition.x = 0;
-      break;
-    case "KeyQ":
-      deltaPosition.y = 0;
-      break;
-    case "KeyE":
-      deltaPosition.y = 0;
-      break;
+function updateCamera() {
+  camera.position.sub(orbitControls.target);
+  orbitControls.target.copy(sphere.position);
+  camera.position.add(sphere.position);
+  camera.getWorldDirection(direction);
+  // console.log(direction);
+}
+
+function teleportPlayerIfOob() {
+  if (camera.position.y <= -100) {
+    sphereCollider.center.set(0, 0, 0);
   }
 }
 
@@ -195,9 +251,13 @@ function onKeyUp(event) {
  * Events
  */
 // Key event
-document.addEventListener("keydown", onKeyDown);
-document.addEventListener("keyup", onKeyUp);
+document.addEventListener("keydown", (event) => {
+  keyStates[event.code] = true;
+});
 
+document.addEventListener("keyup", (event) => {
+  keyStates[event.code] = false;
+});
 // Auto Resize
 window.addEventListener("resize", () => {
   // Update camera
@@ -213,11 +273,15 @@ window.addEventListener("resize", () => {
  * Animate
  */
 const animate = () => {
+  delta = clock.getDelta();
   // Update controls
   orbitControls.update();
 
   // Update Sphere state
-  updatePlayer();
+  controls(delta);
+  updatePlayer(delta);
+  updateCamera();
+  teleportPlayerIfOob();
 
   // Render Scene
   renderer.render(scene, camera);
