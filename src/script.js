@@ -2,13 +2,11 @@ import * as THREE from "three";
 import * as dat from "lil-gui";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { VOXLoader, VOXMesh } from "three/examples/jsm/loaders/VOXLoader.js";
 import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 
 // Octree
 import { Octree } from "three/addons/math/Octree.js";
-import { OctreeHelper } from "three/addons/helpers/OctreeHelper.js";
 
 /**
  ******************************
@@ -106,31 +104,6 @@ gltfLoader.setDRACOLoader(dracoLoader);
 /**
  * Models
  */
-// const loader = new VOXLoader();
-// loader.load("models/monu10.vox", function (chunks) {
-//   for (let i = 0; i < chunks.length; i++) {
-//     const chunk = chunks[i];
-
-//     // displayPalette( chunk.palette );
-
-//     const mesh = new VOXMesh(chunk);
-//     mesh.scale.setScalar(0.5);
-//     scene.add(mesh);
-
-//     console.log(mesh);
-
-//     console.log(worldOctree);
-//     worldOctree.fromGraphNode(mesh);
-//     const octreeHelper = new OctreeHelper(worldOctree);
-//     octreeHelper.visible = false;
-//     scene.add(octreeHelper);
-
-//     gui.add({ debug: false }, "debug").onChange(function (value) {
-//       octreeHelper.visible = value;
-//     });
-//   }
-// });
-
 // Load Building Model
 gltfLoader.load("/models/book.glb", (gltf) => {
   building = gltf.scene;
