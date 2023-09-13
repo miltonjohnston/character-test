@@ -169,6 +169,7 @@ function playerCollisions() {
     const result = worldOctree.capsuleIntersect(playerCollider);
     if (result) {
         playerOnFloor = result.normal.y > -50;
+        if (result.normal.y < 0.8) { playerOnFloor = false }
         if (!playerOnFloor) {
             playerVelocity.addScaledVector(result.normal, -result.normal.dot(playerVelocity));
         }
