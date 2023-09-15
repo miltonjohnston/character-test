@@ -5,8 +5,8 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
 
-import { Octree } from 'three/addons/math/Octree.js';
-import { Capsule } from 'three/examples/jsm/math/Capsule.js';
+import * as CANNON from 'cannon-es';
+import CannonDebugger from 'cannon-es-debugger';
 
 /**
  ******************************
@@ -65,8 +65,10 @@ scene.add(directionalLightHelper);
 const axes = new THREE.AxesHelper(10);
 scene.add(axes);
 
-// Physics
-const worldOctree = new Octree();
+// CANNON
+const world = new CANNON.World();
+world.gravity.set(0, -9.8, 0);
+// const cannonDebugger = new CannonDebugger(scene, world);
 
 // Loader
 const gltfLoader = new GLTFLoader();
@@ -91,27 +93,64 @@ const cameraDirection = new THREE.Vector3();
 let playerOnFloor = false;
 let deltaTime;
 let playerSpeed = 20;
-const GRAVITY = 30;
-const STEPS_PER_FRAME = 5;
+let playerRadius = 0.5;
 
 /**
  * Models
  */
 // Terrian
-gltfLoader.load("/models/book.glb", (gltf) => {
+gltfLoader.load("/models/temp.glb", (gltf) => {
     terrain = gltf.scene;
     scene.add(terrain);
 
-    worldOctree.fromGraphNode(terrain);
+    terrain.traverse(function (node) {
+        if (node.isMesh) {
+            const geometry = node.geometry;
+            const positionAttribute = geometry.attributes.position;
+
+            const scale = node.scale; // Get the scale of the mesh node
+            console.log(node);
+
+            // Apply the scale to the position attribute during trimesh creation
+            const scaledPositionArray = [];
+            const positionArray = positionAttribute.array;
+            for (let i = 0; i < positionArray.length; i += 3) {
+                const x = positionArray[i] * scale.x;
+                const y = positionArray[i + 1] * scale.y;
+                const z = positionArray[i + 2] * scale.z;
+                scaledPositionArray.push(x, y, z);
+            }
+
+            // Create the trimesh with the scaled position array
+            const trimesh = new CANNON.Trimesh(
+                scaledPositionArray,
+                geometry.index ? geometry.index.array : undefined
+            );
+
+            const body = new CANNON.Body({ mass: 0 }); // Adjust the mass as needed
+            body.addShape(trimesh);
+            // Set the initial position, rotation, or other properties of the body
+            body.position.copy(node.position);
+            body.quaternion.copy(node.quaternion);
+
+            // Add the body to your Cannon.js world
+            world.addBody(body);
+        }
+    });
 });
 
 // Character
-const gCapsule = new THREE.CapsuleGeometry(0.35, 0.3, 4, 3);
-const mCapsule = new THREE.MeshPhongMaterial({ color: 0xff33bb });
-const player = new THREE.Mesh(gCapsule, mCapsule);
+const gPlayer = new THREE.SphereGeometry(playerRadius, 12, 12);
+const mPlayer = new THREE.MeshPhongMaterial({ color: 0xff33bb });
+const player = new THREE.Mesh(gPlayer, mPlayer);
+player.position.set(0, 5, 0);
 scene.add(player);
 
-const playerCollider = new Capsule(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 1, 0), 0.35);
+const playerShape = new CANNON.Sphere(playerRadius);
+const playerBody = new CANNON.Body({ mass: 10 });
+playerBody.addShape(playerShape);
+playerBody.position.copy(player.position);
+world.addBody(playerBody);
 
 /**
  * Action
@@ -121,10 +160,8 @@ window.addEventListener("keypress", (event) => {
     if (event.code == "KeyS") moveBackward = true;
     if (event.code == "KeyA") moveLeft = true;
     if (event.code == "KeyD") moveRight = true;
-    if (playerOnFloor) {
-        if (event.code == "Space") {
-            playerVelocity.y = 15;
-        }
+    if (playerBody.velocity.y.toFixed(2) == 0) {
+        if (event.code == "Space") playerBody.velocity.y = 5;
     }
 });
 window.addEventListener("keyup", (event) => {
@@ -164,52 +201,19 @@ function updateVelocity(delta) {
     if (moveLeft) playerVelocity.add(sideDirection().multiplyScalar(-playerSpeed * delta));
 }
 
-function playerCollisions() {
-    playerOnFloor = false;
-    const result = worldOctree.capsuleIntersect(playerCollider);
-    if (result) {
-        playerOnFloor = result.normal.y > -50;
-        if (result.normal.y < 0.3) { playerOnFloor = false }
-        if (!playerOnFloor) {
-            playerVelocity.addScaledVector(result.normal, -result.normal.dot(playerVelocity));
-        }
-        playerCollider.translate(result.normal.multiplyScalar(result.depth));
-    }
-}
-
 function updatePlayer(delta) {
-    updateVelocity(deltaTime);
-    let damping = Math.exp(-4 * delta) - 1;
-    if (!playerOnFloor) {
-        playerVelocity.y -= GRAVITY * delta;
-        damping *= 0.3;
-    }
+    updateVelocity(delta);
+    playerBody.velocity.x = playerVelocity.x;
+    playerBody.velocity.z = playerVelocity.z;
 
-    playerVelocity.addScaledVector(playerVelocity, damping);
-
-    const deltaPosition = playerVelocity.clone().multiplyScalar(delta);
-    playerCollider.translate(deltaPosition);
-    player.position.x = playerCollider.start.x;
-    player.position.y = playerCollider.start.y + 0.15;
-    player.position.z = playerCollider.start.z;
-
-    playerCollisions();
-    updateDirection();
+    playerVelocity.addScaledVector(playerVelocity, -0.1);
 }
 
-function updateDirection() {
-    if (!moveForward && !moveBackward && !moveRight && !moveLeft) {
-        playerDirection.copy(player.position.clone().add(cameraDirection));
-    } else {
-        playerDirection.copy(player.position.clone().add(new THREE.Vector3(playerVelocity.x, 0, playerVelocity.z)));
-    }
-    player.lookAt(playerDirection);
-}
 
 function teleportPlayerIfOob() {
     if (player.position.y <= -100) {
-        playerVelocity.set(0, 0, 0);
-        playerCollider.translate(player.position.multiplyScalar(-1));
+        playerBody.velocity.set(0, 0, 0);
+        playerBody.position.set(0, 5, 0);
     }
 }
 
@@ -228,13 +232,15 @@ window.addEventListener("resize", () => {
  * Animate
  */
 const animate = () => {
-    deltaTime = Math.min(0.05, clock.getDelta()) / STEPS_PER_FRAME;
-    for (let i = 0; i < STEPS_PER_FRAME; i++) {
-        updateCamera();
+    deltaTime = Math.min(clock.getDelta(), 0.1);
 
-        updatePlayer(deltaTime);
-        teleportPlayerIfOob();
-    }
+    updateCamera();
+    updatePlayer(deltaTime);
+    teleportPlayerIfOob();
+
+    player.position.copy(playerBody.position);
+
+    world.step(deltaTime);
 
     // Update controls
     orbitControls.update();
